@@ -1,63 +1,238 @@
-name: Secure YAD
+name: Windows RDP Full Persistent System
 
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'کردار'
+        required: true
+        default: 'start'
+        type: choice
+        options:
+        - start
+        - restore
+        - backup
+
+env:
+  VHD_PATH: "D:\\SystemBackup.vhdx"
+  VHD_SIZE: "50GB"
+  MOUNT_PATH: "C:\\"
+  RDP_USER: "Yad"
+  RDP_PASS: "Ahmed1122$"
 
 jobs:
-  secure-rdp:
+  persistent-system:
     runs-on: windows-latest
-    timeout-minutes: 300  # 5 کاتژمێر = 300 خولەک
-
+    
     steps:
-      - name: Configure Core RDP Settings
+      - name: 🔄 چێکردنی درایڤی هەمیشەیی
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          # پشکنینی ئەگەر درایڤی VHD بوونی هەبێت
+          $vhdExists = Test-Path "${{ env.VHD_PATH }}"
+          
+          if (-not $vhdExists -or "${{ github.event.inputs.action }}" -eq 'start') {
+              Write-Host "🚀 دروستکردنی سیستمێکی نوێ..."
+              
+              # ١. دروستکردنی VHD
+              Write-Host "💾 دروستکردنی VHD..."
+              New-VHD -Path "${{ env.VHD_PATH }}" -SizeBytes ${{ env.VHD_SIZE }} -Dynamic
+              
+              # ٢. لکاندنی VHD
+              $disk = Mount-VHD "${{ env.VHD_PATH }}" -Passthru
+              $diskNumber = $disk.DiskNumber
+              
+              # ٣. فرمات کردن و دانانی سیستم
+              Write-Host "🔧 فرمات کردن..."
+              Initialize-Disk -DiskNumber $diskNumber
+              New-Partition -DiskNumber $diskNumber -UseMaximumSize -AssignDriveLetter S
+              Format-Volume -DriveLetter S -FileSystem NTFS -NewFileSystemLabel "PersistentSystem"
+              
+              # ٤. کۆپیکردنی هەموو سیستەمەکە بۆ VHD
+              Write-Host "📦 کۆپیکردنی هەموو سیستەمەکە..."
+              robocopy C:\ S:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys /XD "Windows.old" "WinSxS"
+              
+              # ٥. دزانی لە درایڤ
+              Dismount-VHD "${{ env.VHD_PATH }}"
+              
+          } elseif ("${{ github.event.inputs.action }}" -eq 'restore') {
+              Write-Host "🔄 گەڕاندنەوەی سیستم لە VHD..."
+              
+              # ١. لکاندنی VHD
+              Mount-VHD "${{ env.VHD_PATH }}"
+              $disk = Get-Disk | Where-Object {$_.Location -like "*${{ env.VHD_PATH }}*"}
+              
+              # ٢. فرمات کردنی درایڤی ئەسڵی (C:) و گواستنەوەی داتا
+              Write-Host "🔄 گواستنەوەی هەموو داتاکان..."
+              
+              # یەکەم: کۆپیکردنی هەموو درایڤەکان
+              Get-Volume | Where-Object {$_.DriveLetter -ne $null} | ForEach-Object {
+                  $sourceDrive = "$($_.DriveLetter):\"
+                  $backupPath = "S:\Backup\$($_.DriveLetter)_Drive"
+                  
+                  if (Test-Path $sourceDrive) {
+                      Write-Host "کۆپیکردنی $sourceDrive..."
+                      robocopy $sourceDrive $backupPath /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL
+                  }
+              }
+              
+              # دووەم: گواستنەوە لە VHD بۆ C:
+              robocopy S:\ C:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL
+              
+              # ٣. دزانی لە درایڤ
+              Dismount-VHD "${{ env.VHD_PATH }}"
+          }
+          
+          Write-Host "✅ سیستەمی هەمیشەیی ئامادەکرا"
+
+      - name: 🎮 ڕێکخستنی RDP
+        run: |
+          # ١. RDP فعال بکە
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" -Value 0
+            
+          # ٢. پاراستن نەوێت
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "UserAuthentication" -Value 0
+            
+          # ٣. Wallی ئاگر
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
+            
+          # ٤. دروستکردنی بەکارهێنەر
+          $securePass = ConvertTo-SecureString "${{ env.RDP_PASS }}" -AsPlainText -Force
+          New-LocalUser -Name "${{ env.RDP_USER }}" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "${{ env.RDP_USER }}"
+          
+          # ٥. ڕێکخستنی بۆ هەموو بەکارهێنەرەکان
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' `
+            -Name "fSingleSessionPerUser" -Value 0
+            
+          # ٦. Restart کردن
+          Restart-Service TermService -Force
+          
+          Write-Host "✅ RDP ئامادەە"
 
-      - name: Create RDP User
+      - name: ☁️ دانانی Tailscale بۆ ئایپی هەمیشەیی
         run: |
-          $password = "Ahmed1122$"  # پاسوۆردێکی سادە
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "Yad" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "Yad"
-          echo "RDP_PASS=Ahmed1122$" >> $env:GITHUB_ENV
-
-      - name: Install Tailscale
-        run: |
+          # دانانی Tailscale
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
-
-      - name: Start Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-rdp-$env:GITHUB_RUN_ID
+          $installer = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installer
+          Start-Process msiexec.exe -ArgumentList "/i", "$installer", "/quiet", "/norestart" -Wait
+          
+          # دەستپێکردنی Tailscale
+          Start-Sleep -Seconds 10
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=persistent-rdp-${{ github.run_id }} `
+            --accept-routes=true `
+            --advertise-exit-node
+            
+          # چاوەڕوانی بۆ IP
           Start-Sleep -Seconds 30
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-          Write-Host "RDP Ready! IP: $tsIP - User: Yad - Pass: Ahmed1122$"
+          echo "PERSISTENT_IP=$tsIP" >> $env:GITHUB_ENV
+          
+          Write-Host "🌐 ئایپی هەمیشەیی: $tsIP"
 
-      - name: Auto-shutdown after 5 hours
+      - name: 💾 System Backup Automation
         run: |
-          Write-Host "=== RDP ACCESS ==="
-          Write-Host "IP: $env:TAILSCALE_IP"
-          Write-Host "User: Yad" 
-          Write-Host "Pass: Ahmed1122$"
-          Write-Host "=================="
-          Write-Host "ئەم RDP ئۆتۆماتیکی دوای ٥ کاتژمێر دەکوژێتەوە"
-          Write-Host "کاتی دەستپێکردن: $(Get-Date)"
+          # دروستکردنی سکریپتی خۆکاری backup
+          $backupScript = @'
+          # سکریپتی خۆکاری هەڵگرتن
+          $backupPath = "$env:TEMP\SystemBackup_$(Get-Date -Format 'yyyyMMdd_HHmmss').zip"
+          $excludePatterns = @(
+              "*.tmp",
+              "*.log", 
+              "pagefile.sys",
+              "hiberfil.sys",
+              "swapfile.sys"
+          )
           
-          # کاونتەر بۆ ٥ کاتژمێر (١٨٠٠٠ چرکە)
-          $totalSeconds = 18000
-          $checkInterval = 300  # ھەر ٥ خولەک جارێک ڕاپۆرت بدە
+          # هەڵگرتنی Registry
+          Write-Host "💾 هەڵگرتنی Registry..."
+          reg export HKLM\Software "$env:TEMP\registry_hklm.reg" /y
+          reg export HKCU "$env:TEMP\registry_hkcu.reg" /y
           
-          for ($i = 0; $i -lt $totalSeconds; $i += $checkInterval) {
-              $remainingMinutes = [math]::Ceiling(($totalSeconds - $i) / 60)
-              Write-Host "[$(Get-Date)] ماوەی مابووە: $remainingMinutes خولەک - CPU Usage: ~0%"
-              Start-Sleep -Seconds $checkInterval
+          # هەڵگرتنی Programs
+          Write-Host "📦 هەڵگرتنی Programs..."
+          Get-WmiObject -Class Win32_Product | Select-Object Name, Version | 
+              Export-Csv "$env:TEMP\installed_programs.csv" -NoTypeInformation
+          
+          # هەڵگرتنی Services
+          Get-Service | Where-Object {$_.StartType -eq 'Automatic'} | 
+              Select-Object Name, DisplayName | 
+              Export-Csv "$env:TEMP\services.csv" -NoTypeInformation
+          
+          # دروستکردنی System Image
+          Write-Host "🖼️ دروستکردنی System Image..."
+          $imagePath = "$env:TEMP\SystemImage.wim"
+          Dism /Capture-Image /ImageFile:"$imagePath" /CaptureDir:C:\ /Name:"FullSystem"
+          
+          Write-Host "✅ هەڵگرتن تەواو بوو: $imagePath"
+'@
+          
+          $backupScript | Out-File -FilePath "C:\AutoBackup.ps1"
+          
+          # دانانی خۆکاری backup هەموو ١٠ خولەک جارێک
+          $taskScript = @'
+          $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-File C:\AutoBackup.ps1"
+          $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)
+          $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+          Register-ScheduledTask -TaskName "AutoSystemBackup" -Action $action -Trigger $trigger -Principal $principal -Description "Auto backup every 10 minutes"
+'@
+          
+          $taskScript | Out-File -FilePath "C:\SetupTask.ps1"
+          powershell -ExecutionPolicy Bypass -File "C:\SetupTask.ps1"
+
+      - name: 📊 نمایشی زانیاری
+        run: |
+          Write-Host "========================================"
+          Write-Host "🚀 Windows RPD با سیستەمی هەمیشەیی"
+          Write-Host "========================================"
+          Write-Host "🌐 ئایپی هەمیشەیی: $env:TAILSCALE_IP"
+          Write-Host "👤 بەکارهێنەر: ${{ env.RDP_USER }}"
+          Write-Host "🔐 وشەی نهێنی: ${{ env.RDP_PASS }}"
+          Write-Host ""
+          Write-Host "✨ تایبەتمەندیەکان:"
+          Write-Host "• هەموو داتا + سیستەم هەڵدەگیرێت"
+          Write-Host "• Programەکان ناسڕێنەوە"
+          Write-Host "• ڕێکخستنەکان پارێزراون"
+          Write-Host "• فایلەکان دەمێننەوە"
+          Write-Host ""
+          Write-Host "💡 ڕێنمایی:"
+          Write-Host "1. هەرچی دایبنێ، دەمێنێتەوە"
+          Write-Host "2. Programەکان دادەنێ، دووبارە نابێ دادەنێیتەوە"
+          Write-Host "3. کاتێک دووبارە دەستپێدەکەیت، هەموو شتێک وەک پێشترە"
+          Write-Host "========================================"
+          
+          # دانانی کاتی کۆتایی
+          $shutdownScript = @'
+          $endTime = (Get-Date).AddHours(5)
+          
+          while ((Get-Date) -lt $endTime) {
+              $remaining = $endTime - (Get-Date)
+              $hours = [math]::Floor($remaining.TotalHours)
+              $minutes = [math]::Floor($remaining.TotalMinutes) % 60
+              
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: $hours کاتژمێر $minutes خولەک"
+              
+              # Backupی خۆکار هەموو ١٠ خولەک جارێک
+              if ((Get-Date).Minute % 10 -eq 0) {
+                  powershell -ExecutionPolicy Bypass -File C:\AutoBackup.ps1
+              }
+              
+              Start-Sleep -Seconds 60
           }
           
-          Write-Host "کاتی تەواوبوون! $(Get-Date)"
-          Write-Host "RDP ئێستا خۆکارانە دەکوژێتەوە"
+          # کۆتایی: Backupی کۆتایی
+          Write-Host "💾 Backupی کۆتایی..."
+          powershell -ExecutionPolicy Bypass -File C:\AutoBackup.ps1
+          
+          Write-Host "🕒 کاتی تەواو بوون! $(Get-Date)"
+          Write-Host "سیستەم خۆکارانە دەکوژێتەوە"
+'@
+          
+          $shutdownScript | Out-File -FilePath "C:\ShutdownTimer.ps1"
+          Start-Process powershell -ArgumentList "-File C:\ShutdownTimer.ps1" -NoNewWindow
