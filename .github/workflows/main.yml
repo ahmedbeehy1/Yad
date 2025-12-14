@@ -1,4 +1,4 @@
-name: Windows RDP Full Persistent System
+name: Windows RDP Persistent Access
 
 on:
   workflow_dispatch:
@@ -9,256 +9,85 @@ on:
         default: 'start'
         type: choice
         options:
-        - start
-        - restore
-        - backup
+          - start
 
 env:
-  VHD_PATH: "D:\\SystemBackup.vhdx"
-  VHD_SIZE: "50GB"
-  MOUNT_PATH: "C:\\"
   RDP_USER: "Yad"
   RDP_PASS: "Ahmed1122$"
 
 jobs:
-  persistent-system:
+  rdp-setup:
     runs-on: windows-latest
-    
-    steps:
-      - name: چێکردنی درایڤی هەمیشەیی
-        run: |
-          # پشکنینی ئەگەر درایڤی VHD بوونی هەبێت
-          $vhdExists = Test-Path "${{ env.VHD_PATH }}"
-          
-          if (-not $vhdExists -or "${{ github.event.inputs.action }}" -eq 'start') {
-              Write-Host "🚀 دروستکردنی سیستمێکی نوێ..."
-              
-              # ١. دروستکردنی VHD بە diskpart
-              Write-Host "💾 دروستکردنی VHD..."
-              
-              # دروستکردنی فایلی diskpart
-              $diskpartContent = "create vdisk file=`"${{ env.VHD_PATH }}`" maximum=${{ env.VHD_SIZE }} type=expandable`n"
-              $diskpartContent += "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
-              $diskpartContent += "attach vdisk`n"
-              $diskpartContent += "create partition primary`n"
-              $diskpartContent += "format fs=ntfs quick label=`"PersistentSystem`"`n"
-              $diskpartContent += "assign letter=S`n"
-              $diskpartContent += "detach vdisk`n"
-              
-              $diskpartContent | Out-File -FilePath "$env:TEMP\create_vhd.txt" -Encoding ASCII
-              diskpart /s "$env:TEMP\create_vhd.txt"
-              
-              # ٢. لکاندنی VHD
-              $mountContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
-              $mountContent += "attach vdisk`n"
-              
-              $mountContent | Out-File -FilePath "$env:TEMP\mount_vhd.txt" -Encoding ASCII
-              diskpart /s "$env:TEMP\mount_vhd.txt"
-              
-              # چاوەڕوانی بۆ لکاندن
-              Start-Sleep -Seconds 5
-              
-              # ٣. کۆپیکردنی هەموو سیستەمەکە بۆ VHD
-              Write-Host "📦 کۆپیکردنی هەموو سیستەمەکە..."
-              robocopy C:\ S:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys hiberfil.sys swapfile.sys /XD "Windows.old" "WinSxS" "\System Volume Information" "\Recovery"
-              
-              # ٤. دزانی لە درایڤ
-              $detachContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
-              $detachContent += "detach vdisk`n"
-              
-              $detachContent | Out-File -FilePath "$env:TEMP\detach_vhd.txt" -Encoding ASCII
-              diskpart /s "$env:TEMP\detach_vhd.txt"
-              
-          } elseif ("${{ github.event.inputs.action }}" -eq 'restore') {
-              Write-Host "🔄 گەڕاندنەوەی سیستم لە VHD..."
-              
-              # ١. لکاندنی VHD
-              $mountContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
-              $mountContent += "attach vdisk`n"
-              
-              $mountContent | Out-File -FilePath "$env:TEMP\mount_restore.txt" -Encoding ASCII
-              diskpart /s "$env:TEMP\mount_restore.txt"
-              
-              # چاوەڕوانی بۆ لکاندن
-              Start-Sleep -Seconds 5
-              
-              # ٢. فرمات کردنی درایڤی ئەسڵی (C:) و گواستنەوەی داتا
-              Write-Host "🔄 گواستنەوەی هەموو داتاکان..."
-              
-              # یەکەم: دروستکردنی Backup
-              New-Item -ItemType Directory -Path "S:\Backup" -Force
-              
-              # کۆپیکردنی هەموو درایڤەکان بۆ Backup
-              Get-WmiObject Win32_LogicalDisk | Where-Object {$_.DriveType -eq 3} | ForEach-Object {
-                  $driveLetter = $_.DeviceID.TrimEnd(':')
-                  $sourceDrive = "$driveLetter`:\"
-                  $backupPath = "S:\Backup\${driveLetter}_Drive"
-                  
-                  if (Test-Path $sourceDrive -and $driveLetter -ne "S") {
-                      Write-Host "کۆپیکردنی $sourceDrive..."
-                      New-Item -ItemType Directory -Path $backupPath -Force
-                      robocopy $sourceDrive $backupPath /E /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys hiberfil.sys swapfile.sys
-                  }
-              }
-              
-              # دووەم: گواستنەوە لە VHD بۆ C:
-              Write-Host "گواستنەوەی داتا لە VHD بۆ C:..."
-              robocopy S:\ C:\ /E /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF "pagefile.sys" "hiberfil.sys" "swapfile.sys"
-              
-              # ٣. دزانی لە درایڤ
-              $detachContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
-              $detachContent += "detach vdisk`n"
-              
-              $detachContent | Out-File -FilePath "$env:TEMP\detach_restore.txt" -Encoding ASCII
-              diskpart /s "$env:TEMP\detach_restore.txt"
-          }
-          
-          Write-Host "✅ سیستەمی هەمیشەیی ئامادەکرا"
+    if: ${{ inputs.action == 'start' }}  # تەنها start پشتیوانی دەکات
 
+    steps:
       - name: ڕێکخستنی RDP
         run: |
-          # ١. RDP فعال بکە
+          # RDP چالاککردن
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-            
-          # ٢. پاراستن نەوێت
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-            
-          # ٣. Wallی ئاگر
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-            
-          # ٤. دروستکردنی بەکارهێنەر
-          $securePass = ConvertTo-SecureString "${{ env.RDP_PASS }}" -AsPlainText -Force
-          New-LocalUser -Name "${{ env.RDP_USER }}" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "${{ env.RDP_USER }}"
           
-          # ٥. ڕێکخستنی بۆ هەموو بەکارهێنەرەکان
+          # NLA off (بۆ سادگی لە ngrok/Tailscale، ئەگینا on بکە)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          
+          # Firewall rule
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          
+          # بەکارهێنەر دروستکردن
+          $securePass = ConvertTo-SecureString "${{ env.RDP_PASS }}" -AsPlainText -Force
+          New-LocalUser -Name "${{ env.RDP_USER }}" -Password $securePass -FullName "RDP User" -Description "GitHub Actions RDP" -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "${{ env.RDP_USER }}"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "${{ env.RDP_USER }}"
+          
+          # Multiple sessions
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0
-            
-          # ٦. Restart کردن
+          
           Restart-Service TermService -Force
           
-          Write-Host "✅ RDP ئامادەە"
+          Write-Host "✅ RDP ئامادەیە"
 
-      - name: دانانی Tailscale بۆ ئایپی هەمیشەیی
+      - name: دانانی Tailscale بۆ IP هەمیشەیی
         run: |
-          # دانانی Tailscale
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installer = "$env:TEMP\tailscale.msi"
           
           Invoke-WebRequest -Uri $tsUrl -OutFile $installer
           Start-Process msiexec.exe -ArgumentList "/i", "$installer", "/quiet", "/norestart" -Wait
           
-          # دەستپێکردنی Tailscale
-          Start-Sleep -Seconds 10
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=persistent-rdp-${{ github.run_id }} --accept-routes=true --advertise-exit-node
-            
-          # چاوەڕوانی بۆ IP
+          Start-Sleep -Seconds 15
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rdp-${{ github.run_id }} --accept-routes=true
+          
           Start-Sleep -Seconds 30
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-          echo "PERSISTENT_IP=$tsIP" >> $env:GITHUB_ENV
           
-          Write-Host "🌐 ئایپی هەمیشەیی: $tsIP"
+          Write-Host "🌐 Tailscale IP: $tsIP"
 
       - name: نمایشی زانیاری
         run: |
           Write-Host "========================================"
-          Write-Host "🚀 Windows RPD با سیستەمی هەمیشەیی"
+          Write-Host "🚀 Windows RDP ئامادەیە!"
           Write-Host "========================================"
-          Write-Host "🌐 ئایپی هەمیشەیی: $env:TAILSCALE_IP"
+          Write-Host "🌐 IP هەمیشەیی (Tailscale): $env:TAILSCALE_IP"
           Write-Host "👤 بەکارهێنەر: ${{ env.RDP_USER }}"
           Write-Host "🔐 وشەی نهێنی: ${{ env.RDP_PASS }}"
+          Write-Host "پۆرت: 3389"
           Write-Host ""
-          Write-Host "✨ تایبەتمەندیەکان:"
-          Write-Host "• هەموو داتا + سیستەم هەڵدەگیرێت"
-          Write-Host "• Programەکان ناسڕێنەوە"
-          Write-Host "• ڕێکخستنەکان پارێزراون"
-          Write-Host "• فایلەکان دەمێننەوە"
-          Write-Host ""
-          Write-Host "💡 ڕێنمایی:"
-          Write-Host "1. هەرچی دایبنێ، دەمێنێتەوە"
-          Write-Host "2. Programەکان دادەنێ، دووبارە نابێ دادەنێیتەوە"
-          Write-Host "3. کاتێک دووبارە دەستپێدەکەیت، هەموو شتێک وەک پێشترە"
+          Write-Host "💡 ڕێنمایی: Tailscale دابەزێنە و login بکە، پاشان RDP بکە بە IPـەکە."
+          Write-Host "⚠️  داتاکان دوای shutdown دەسڕدرێنەوە (hosted runner)."
           Write-Host "========================================"
-          
-          # دانانی کاتی کۆتایی (٥ کاتژمێر)
-          Write-Host "⏰ سیستم خۆکارانە دەکوژێتەوە دوای ٥ کاتژمێر..."
-          
-          $timerContent = "$endTime = (Get-Date).AddHours(5)`n"
-          $timerContent += "$checkInterval = 300  # ٥ خولەک`n`n"
-          $timerContent += "while ((Get-Date) -lt `$endTime) {`n"
-          $timerContent += "    `$remaining = `$endTime - (Get-Date)`n"
-          $timerContent += "    `$hours = [math]::Floor(`$remaining.TotalHours)`n"
-          $timerContent += "    `$minutes = [math]::Floor(`$remaining.TotalMinutes) % 60`n`n"
-          $timerContent += "    Write-Host `"[`$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: `$hours کاتژمێر `$minutes خولەک`"`n`n"
-          $timerContent += "    Start-Sleep -Seconds `$checkInterval`n"
-          $timerContent += "}`n`n"
-          $timerContent += "Write-Host `"🕒 کاتی تەواو بوون! `$(Get-Date)`"`n"
-          $timerContent += "Write-Host `"سیستەم خۆکارانە دەکوژێتەوە`"`n"
-          
-          $timerContent | Out-File -FilePath "$env:TEMP\shutdown_timer.ps1" -Encoding UTF8
-          Start-Process powershell -ArgumentList "-File $env:TEMP\shutdown_timer.ps1" -NoNewWindow
 
-      - name: Backupی کۆتایی پێش کوژانەوە
+      - name: Timer بۆ shutdown خودکار (5 کاتژمێر)
         run: |
-          Write-Host "💾 هەڵگرتنی کۆتایی پێش کوژانەوە..."
+          $endTime = (Get-Date).AddHours(5)
+          $checkInterval = 300  # 5 خولەک
           
-          # ١. دروستکردنی Backup فۆڵدەر
-          $backupDir = "$env:TEMP\Final_Backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-          New-Item -ItemType Directory -Path $backupDir -Force
-          
-          # ٢. هەڵگرتنی بەکارهێنەران
-          $usersBackup = "$backupDir\Users_Backup.zip"
-          if (Test-Path "C:\Users") {
-              $userFolders = Get-ChildItem "C:\Users" -Directory | Where-Object {$_.Name -notin @("Public", "Default", "Default.migrated")}
-              
-              foreach ($user in $userFolders) {
-                  $userBackup = "$backupDir\$($user.Name)_Backup.zip"
-                  try {
-                      Compress-Archive -Path $user.FullName -DestinationPath $userBackup -CompressionLevel Optimal -ErrorAction SilentlyContinue
-                      Write-Host "✅ $($user.Name) هەڵگیرا"
-                  } catch {
-                      Write-Host "⚠️ نەتوانرا $($user.Name) هەڵبگیرێت"
-                  }
-              }
+          while ((Get-Date) -lt $endTime) {
+              $remaining = $endTime - (Get-Date)
+              $hours = [math]::Floor($remaining.TotalHours)
+              $minutes = $remaining.Minutes
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: $hours کاتژمێر و $minutes خولەک"
+              Start-Sleep -Seconds $checkInterval
           }
           
-          # ٣. هەڵگرتنی Programs لیست
-          Write-Host "📦 هەڵگرتنی Programs لیست..."
-          try {
-              Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | 
-                  Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | 
-                  Where-Object {$_.DisplayName} |
-                  Export-Csv "$backupDir\Installed_Programs.csv" -NoTypeInformation -Encoding UTF8
-          } catch {
-              # Alternative method
-              Get-WmiObject -Class Win32_Product | Select-Object Name, Version, InstallDate | 
-                  Export-Csv "$backupDir\Installed_Programs_WMI.csv" -NoTypeInformation -Encoding UTF8
-          }
-          
-          # ٤. هەڵگرتنی Registry
-          Write-Host "🔧 هەڵگرتنی Registry..."
-          try {
-              reg export "HKCU" "$backupDir\HKCU_Backup.reg" /y
-              reg export "HKLM\Software" "$backupDir\HKLM_Software_Backup.reg" /y
-          } catch {
-              Write-Host "⚠️ Registry هەڵگرتن شکستی هێنا"
-          }
-          
-          # ٥. هەڵگرتنی Desktop, Documents, Downloads
-          $importantFolders = @("Desktop", "Documents", "Downloads", "Pictures", "Videos")
-          foreach ($folder in $importantFolders) {
-              $userFolder = "C:\Users\${{ env.RDP_USER }}\$folder"
-              if (Test-Path $userFolder) {
-                  $folderBackup = "$backupDir\${folder}_Backup.zip"
-                  try {
-                      Compress-Archive -Path $userFolder -DestinationPath $folderBackup -CompressionLevel Optimal -ErrorAction SilentlyContinue
-                  } catch { }
-              }
-          }
-          
-          # ٦. کۆی گەورەیی
-          $totalSize = (Get-ChildItem $backupDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          Write-Host "✅ هەموو داتاکان هەڵگیران"
-          Write-Host "📊 کۆی گەورەیی: $([math]::Round($totalSize, 2)) MB"
-          Write-Host "📁 فۆڵدەری Backup: $backupDir"
+          Write-Host "🕒 کات تەواو بوو! سیستم دەکوژێتەوە..."
+          shutdown /s /t 30
