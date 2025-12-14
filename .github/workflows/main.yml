@@ -35,26 +35,24 @@ jobs:
               
               # ١. دروستکردنی VHD بە diskpart
               Write-Host "💾 دروستکردنی VHD..."
-              $diskpartScript = @"
-create vdisk file="${{ env.VHD_PATH }}" maximum=${{ env.VHD_SIZE }} type=expandable
-select vdisk file="${{ env.VHD_PATH }}"
-attach vdisk
-create partition primary
-format fs=ntfs quick label="PersistentSystem"
-assign letter=S
-detach vdisk
-"@
               
-              $diskpartScript | Out-File -FilePath "$env:TEMP\create_vhd.txt" -Encoding ASCII
+              # دروستکردنی فایلی diskpart
+              $diskpartContent = "create vdisk file=`"${{ env.VHD_PATH }}`" maximum=${{ env.VHD_SIZE }} type=expandable`n"
+              $diskpartContent += "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
+              $diskpartContent += "attach vdisk`n"
+              $diskpartContent += "create partition primary`n"
+              $diskpartContent += "format fs=ntfs quick label=`"PersistentSystem`"`n"
+              $diskpartContent += "assign letter=S`n"
+              $diskpartContent += "detach vdisk`n"
+              
+              $diskpartContent | Out-File -FilePath "$env:TEMP\create_vhd.txt" -Encoding ASCII
               diskpart /s "$env:TEMP\create_vhd.txt"
               
               # ٢. لکاندنی VHD
-              $mountScript = @"
-select vdisk file="${{ env.VHD_PATH }}"
-attach vdisk
-"@
+              $mountContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
+              $mountContent += "attach vdisk`n"
               
-              $mountScript | Out-File -FilePath "$env:TEMP\mount_vhd.txt" -Encoding ASCII
+              $mountContent | Out-File -FilePath "$env:TEMP\mount_vhd.txt" -Encoding ASCII
               diskpart /s "$env:TEMP\mount_vhd.txt"
               
               # چاوەڕوانی بۆ لکاندن
@@ -65,24 +63,20 @@ attach vdisk
               robocopy C:\ S:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys hiberfil.sys swapfile.sys /XD "Windows.old" "WinSxS" "\System Volume Information" "\Recovery"
               
               # ٤. دزانی لە درایڤ
-              $detachScript = @"
-select vdisk file="${{ env.VHD_PATH }}"
-detach vdisk
-"@
+              $detachContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
+              $detachContent += "detach vdisk`n"
               
-              $detachScript | Out-File -FilePath "$env:TEMP\detach_vhd.txt" -Encoding ASCII
+              $detachContent | Out-File -FilePath "$env:TEMP\detach_vhd.txt" -Encoding ASCII
               diskpart /s "$env:TEMP\detach_vhd.txt"
               
           } elseif ("${{ github.event.inputs.action }}" -eq 'restore') {
               Write-Host "🔄 گەڕاندنەوەی سیستم لە VHD..."
               
               # ١. لکاندنی VHD
-              $mountScript = @"
-select vdisk file="${{ env.VHD_PATH }}"
-attach vdisk
-"@
+              $mountContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
+              $mountContent += "attach vdisk`n"
               
-              $mountScript | Out-File -FilePath "$env:TEMP\mount_restore.txt" -Encoding ASCII
+              $mountContent | Out-File -FilePath "$env:TEMP\mount_restore.txt" -Encoding ASCII
               diskpart /s "$env:TEMP\mount_restore.txt"
               
               # چاوەڕوانی بۆ لکاندن
@@ -112,12 +106,10 @@ attach vdisk
               robocopy S:\ C:\ /E /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF "pagefile.sys" "hiberfil.sys" "swapfile.sys"
               
               # ٣. دزانی لە درایڤ
-              $detachScript = @"
-select vdisk file="${{ env.VHD_PATH }}"
-detach vdisk
-"@
+              $detachContent = "select vdisk file=`"${{ env.VHD_PATH }}`"`n"
+              $detachContent += "detach vdisk`n"
               
-              $detachScript | Out-File -FilePath "$env:TEMP\detach_restore.txt" -Encoding ASCII
+              $detachContent | Out-File -FilePath "$env:TEMP\detach_restore.txt" -Encoding ASCII
               diskpart /s "$env:TEMP\detach_restore.txt"
           }
           
@@ -192,25 +184,19 @@ detach vdisk
           # دانانی کاتی کۆتایی (٥ کاتژمێر)
           Write-Host "⏰ سیستم خۆکارانە دەکوژێتەوە دوای ٥ کاتژمێر..."
           
-          $timerScript = @'
-$endTime = (Get-Date).AddHours(5)
-$checkInterval = 300  # ٥ خولەک
-
-while ((Get-Date) -lt $endTime) {
-    $remaining = $endTime - (Get-Date)
-    $hours = [math]::Floor($remaining.TotalHours)
-    $minutes = [math]::Floor($remaining.TotalMinutes) % 60
-    
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: $hours کاتژمێر $minutes خولەک"
-    
-    Start-Sleep -Seconds $checkInterval
-}
-
-Write-Host "🕒 کاتی تەواو بوون! $(Get-Date)"
-Write-Host "سیستەم خۆکارانە دەکوژێتەوە"
-'@
+          $timerContent = "$endTime = (Get-Date).AddHours(5)`n"
+          $timerContent += "$checkInterval = 300  # ٥ خولەک`n`n"
+          $timerContent += "while ((Get-Date) -lt `$endTime) {`n"
+          $timerContent += "    `$remaining = `$endTime - (Get-Date)`n"
+          $timerContent += "    `$hours = [math]::Floor(`$remaining.TotalHours)`n"
+          $timerContent += "    `$minutes = [math]::Floor(`$remaining.TotalMinutes) % 60`n`n"
+          $timerContent += "    Write-Host `"[`$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: `$hours کاتژمێر `$minutes خولەک`"`n`n"
+          $timerContent += "    Start-Sleep -Seconds `$checkInterval`n"
+          $timerContent += "}`n`n"
+          $timerContent += "Write-Host `"🕒 کاتی تەواو بوون! `$(Get-Date)`"`n"
+          $timerContent += "Write-Host `"سیستەم خۆکارانە دەکوژێتەوە`"`n"
           
-          $timerScript | Out-File -FilePath "$env:TEMP\shutdown_timer.ps1" -Encoding UTF8
+          $timerContent | Out-File -FilePath "$env:TEMP\shutdown_timer.ps1" -Encoding UTF8
           Start-Process powershell -ArgumentList "-File $env:TEMP\shutdown_timer.ps1" -NoNewWindow
 
       - name: Backupی کۆتایی پێش کوژانەوە
