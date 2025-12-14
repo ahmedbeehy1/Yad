@@ -132,48 +132,39 @@ jobs:
       - name: System Backup Automation
         run: |
           # دروستکردنی سکریپتی خۆکاری backup
-          $backupScriptContent = @'
-# سکریپتی خۆکاری هەڵگرتن
-$backupPath = "$env:TEMP\SystemBackup_$(Get-Date -Format 'yyyyMMdd_HHmmss').zip"
-$excludePatterns = @(
-    "*.tmp",
-    "*.log", 
-    "pagefile.sys",
-    "hiberfil.sys",
-    "swapfile.sys"
-)
-
-# هەڵگرتنی Registry
-Write-Host "💾 هەڵگرتنی Registry..."
-reg export HKLM\Software "$env:TEMP\registry_hklm.reg" /y
-reg export HKCU "$env:TEMP\registry_hkcu.reg" /y
-
-# هەڵگرتنی Programs
-Write-Host "📦 هەڵگرتنی Programs..."
-Get-WmiObject -Class Win32_Product | Select-Object Name, Version | Export-Csv "$env:TEMP\installed_programs.csv" -NoTypeInformation
-
-# هەڵگرتنی Services
-Get-Service | Where-Object {$_.StartType -eq 'Automatic'} | Select-Object Name, DisplayName | Export-Csv "$env:TEMP\services.csv" -NoTypeInformation
-
-# دروستکردنی System Image
-Write-Host "🖼️ دروستکردنی System Image..."
-$imagePath = "$env:TEMP\SystemImage.wim"
-Dism /Capture-Image /ImageFile:"$imagePath" /CaptureDir:C:\ /Name:"FullSystem"
-
-Write-Host "✅ هەڵگرتن تەواو بوو: $imagePath"
-'@
+          $backupScriptContent = "# سکریپتی خۆکاری هەڵگرتن\n"
+          $backupScriptContent += "$backupPath = \"`$env:TEMP\\SystemBackup_`$(Get-Date -Format 'yyyyMMdd_HHmmss').zip\"\n"
+          $backupScriptContent += "$excludePatterns = @(\n"
+          $backupScriptContent += "    \"*.tmp\",\n"
+          $backupScriptContent += "    \"*.log\", \n"
+          $backupScriptContent += "    \"pagefile.sys\",\n"
+          $backupScriptContent += "    \"hiberfil.sys\",\n"
+          $backupScriptContent += "    \"swapfile.sys\"\n"
+          $backupScriptContent += ")\n\n"
+          $backupScriptContent += "# هەڵگرتنی Registry\n"
+          $backupScriptContent += "Write-Host \"💾 هەڵگرتنی Registry...\"\n"
+          $backupScriptContent += "reg export HKLM\\Software \"`$env:TEMP\\registry_hklm.reg\" /y\n"
+          $backupScriptContent += "reg export HKCU \"`$env:TEMP\\registry_hkcu.reg\" /y\n\n"
+          $backupScriptContent += "# هەڵگرتنی Programs\n"
+          $backupScriptContent += "Write-Host \"📦 هەڵگرتنی Programs...\"\n"
+          $backupScriptContent += "Get-WmiObject -Class Win32_Product | Select-Object Name, Version | Export-Csv \"`$env:TEMP\\installed_programs.csv\" -NoTypeInformation\n\n"
+          $backupScriptContent += "# هەڵگرتنی Services\n"
+          $backupScriptContent += "Get-Service | Where-Object {`$_.StartType -eq 'Automatic'} | Select-Object Name, DisplayName | Export-Csv \"`$env:TEMP\\services.csv\" -NoTypeInformation\n\n"
+          $backupScriptContent += "# دروستکردنی System Image\n"
+          $backupScriptContent += "Write-Host \"🖼️ دروستکردنی System Image...\"\n"
+          $backupScriptContent += "$imagePath = \"`$env:TEMP\\SystemImage.wim\"\n"
+          $backupScriptContent += "Dism /Capture-Image /ImageFile:\"`$imagePath\" /CaptureDir:C:\\ /Name:\"FullSystem\"\n\n"
+          $backupScriptContent += "Write-Host \"✅ هەڵگرتن تەواو بوو: `$imagePath\"\n"
           
-          $backupScriptContent | Out-File -FilePath "C:\AutoBackup.ps1"
+          $backupScriptContent | Out-File -FilePath "C:\AutoBackup.ps1" -Encoding UTF8
           
           # دانانی خۆکاری backup هەموو ١٠ خولەک جارێک
-          $taskScriptContent = @'
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-File C:\AutoBackup.ps1"
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-Register-ScheduledTask -TaskName "AutoSystemBackup" -Action $action -Trigger $trigger -Principal $principal -Description "Auto backup every 10 minutes"
-'@
+          $taskScriptContent = "$action = New-ScheduledTaskAction -Execute \"powershell.exe\" -Argument \"-File C:\\AutoBackup.ps1\"\n"
+          $taskScriptContent += "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)\n"
+          $taskScriptContent += "$principal = New-ScheduledTaskPrincipal -UserId \"SYSTEM\" -LogonType ServiceAccount -RunLevel Highest\n"
+          $taskScriptContent += "Register-ScheduledTask -TaskName \"AutoSystemBackup\" -Action `$action -Trigger `$trigger -Principal `$principal -Description \"Auto backup every 10 minutes\"\n"
           
-          $taskScriptContent | Out-File -FilePath "C:\SetupTask.ps1"
+          $taskScriptContent | Out-File -FilePath "C:\SetupTask.ps1" -Encoding UTF8
           powershell -ExecutionPolicy Bypass -File "C:\SetupTask.ps1"
 
       - name: نمایشی زانیاری
@@ -198,33 +189,25 @@ Register-ScheduledTask -TaskName "AutoSystemBackup" -Action $action -Trigger $tr
           Write-Host "========================================"
           
           # دانانی کاتی کۆتایی
-          $shutdownScriptContent = @'
-$endTime = (Get-Date).AddHours(5)
-
-while ((Get-Date) -lt $endTime) {
-    $remaining = $endTime - (Get-Date)
-    $hours = [math]::Floor($remaining.TotalHours)
-    $minutes = [math]::Floor($remaining.TotalMinutes) % 60
-    
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: $hours کاتژمێر $minutes خولەک"
-    
-    # Backupی خۆکار هەموو ١٠ خولەک جارێک
-    if ((Get-Date).Minute % 10 -eq 0) {
-        powershell -ExecutionPolicy Bypass -File C:\AutoBackup.ps1
-    }
-    
-    Start-Sleep -Seconds 60
-}
-
-# کۆتایی: Backupی کۆتایی
-Write-Host "💾 Backupی کۆتایی..."
-powershell -ExecutionPolicy Bypass -File C:\AutoBackup.ps1
-
-Write-Host "🕒 کاتی تەواو بوون! $(Get-Date)"
-Write-Host "سیستەم خۆکارانە دەکوژێتەوە"
-'@
+          $shutdownScriptContent = "$endTime = (Get-Date).AddHours(5)\n\n"
+          $shutdownScriptContent += "while ((Get-Date) -lt `$endTime) {\n"
+          $shutdownScriptContent += "    `$remaining = `$endTime - (Get-Date)\n"
+          $shutdownScriptContent += "    `$hours = [math]::Floor(`$remaining.TotalHours)\n"
+          $shutdownScriptContent += "    `$minutes = [math]::Floor(`$remaining.TotalMinutes) % 60\n\n"
+          $shutdownScriptContent += "    Write-Host \"[`$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: `$hours کاتژمێر `$minutes خولەک\"\n\n"
+          $shutdownScriptContent += "    # Backupی خۆکار هەموو ١٠ خولەک جارێک\n"
+          $shutdownScriptContent += "    if ((Get-Date).Minute % 10 -eq 0) {\n"
+          $shutdownScriptContent += "        powershell -ExecutionPolicy Bypass -File C:\\AutoBackup.ps1\n"
+          $shutdownScriptContent += "    }\n\n"
+          $shutdownScriptContent += "    Start-Sleep -Seconds 60\n"
+          $shutdownScriptContent += "}\n\n"
+          $shutdownScriptContent += "# کۆتایی: Backupی کۆتایی\n"
+          $shutdownScriptContent += "Write-Host \"💾 Backupی کۆتایی...\"\n"
+          $shutdownScriptContent += "powershell -ExecutionPolicy Bypass -File C:\\AutoBackup.ps1\n\n"
+          $shutdownScriptContent += "Write-Host \"🕒 کاتی تەواو بوون! `$(Get-Date)\"\n"
+          $shutdownScriptContent += "Write-Host \"سیستەم خۆکارانە دەکوژێتەوە\"\n"
           
-          $shutdownScriptContent | Out-File -FilePath "C:\ShutdownTimer.ps1"
+          $shutdownScriptContent | Out-File -FilePath "C:\ShutdownTimer.ps1" -Encoding UTF8
           Start-Process powershell -ArgumentList "-File C:\ShutdownTimer.ps1" -NoNewWindow
 
       - name: Backupی کۆتایی پێش کوژانەوە
