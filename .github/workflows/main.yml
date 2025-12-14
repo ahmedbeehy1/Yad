@@ -33,53 +33,92 @@ jobs:
           if (-not $vhdExists -or "${{ github.event.inputs.action }}" -eq 'start') {
               Write-Host "🚀 دروستکردنی سیستمێکی نوێ..."
               
-              # ١. دروستکردنی VHD
+              # ١. دروستکردنی VHD بە diskpart
               Write-Host "💾 دروستکردنی VHD..."
-              New-VHD -Path "${{ env.VHD_PATH }}" -SizeBytes ${{ env.VHD_SIZE }} -Dynamic
+              $diskpartScript = @"
+create vdisk file="${{ env.VHD_PATH }}" maximum=${{ env.VHD_SIZE }} type=expandable
+select vdisk file="${{ env.VHD_PATH }}"
+attach vdisk
+create partition primary
+format fs=ntfs quick label="PersistentSystem"
+assign letter=S
+detach vdisk
+"@
+              
+              $diskpartScript | Out-File -FilePath "$env:TEMP\create_vhd.txt" -Encoding ASCII
+              diskpart /s "$env:TEMP\create_vhd.txt"
               
               # ٢. لکاندنی VHD
-              $disk = Mount-VHD "${{ env.VHD_PATH }}" -Passthru
-              $diskNumber = $disk.DiskNumber
+              $mountScript = @"
+select vdisk file="${{ env.VHD_PATH }}"
+attach vdisk
+"@
               
-              # ٣. فرمات کردن و دانانی سیستم
-              Write-Host "🔧 فرمات کردن..."
-              Initialize-Disk -DiskNumber $diskNumber
-              New-Partition -DiskNumber $diskNumber -UseMaximumSize -AssignDriveLetter S
-              Format-Volume -DriveLetter S -FileSystem NTFS -NewFileSystemLabel "PersistentSystem"
+              $mountScript | Out-File -FilePath "$env:TEMP\mount_vhd.txt" -Encoding ASCII
+              diskpart /s "$env:TEMP\mount_vhd.txt"
               
-              # ٤. کۆپیکردنی هەموو سیستەمەکە بۆ VHD
+              # چاوەڕوانی بۆ لکاندن
+              Start-Sleep -Seconds 5
+              
+              # ٣. کۆپیکردنی هەموو سیستەمەکە بۆ VHD
               Write-Host "📦 کۆپیکردنی هەموو سیستەمەکە..."
-              robocopy C:\ S:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys /XD "Windows.old" "WinSxS"
+              robocopy C:\ S:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys hiberfil.sys swapfile.sys /XD "Windows.old" "WinSxS" "\System Volume Information" "\Recovery"
               
-              # ٥. دزانی لە درایڤ
-              Dismount-VHD "${{ env.VHD_PATH }}"
+              # ٤. دزانی لە درایڤ
+              $detachScript = @"
+select vdisk file="${{ env.VHD_PATH }}"
+detach vdisk
+"@
+              
+              $detachScript | Out-File -FilePath "$env:TEMP\detach_vhd.txt" -Encoding ASCII
+              diskpart /s "$env:TEMP\detach_vhd.txt"
               
           } elseif ("${{ github.event.inputs.action }}" -eq 'restore') {
               Write-Host "🔄 گەڕاندنەوەی سیستم لە VHD..."
               
               # ١. لکاندنی VHD
-              Mount-VHD "${{ env.VHD_PATH }}"
-              $disk = Get-Disk | Where-Object {$_.Location -like "*${{ env.VHD_PATH }}*"}
+              $mountScript = @"
+select vdisk file="${{ env.VHD_PATH }}"
+attach vdisk
+"@
+              
+              $mountScript | Out-File -FilePath "$env:TEMP\mount_restore.txt" -Encoding ASCII
+              diskpart /s "$env:TEMP\mount_restore.txt"
+              
+              # چاوەڕوانی بۆ لکاندن
+              Start-Sleep -Seconds 5
               
               # ٢. فرمات کردنی درایڤی ئەسڵی (C:) و گواستنەوەی داتا
               Write-Host "🔄 گواستنەوەی هەموو داتاکان..."
               
-              # یەکەم: کۆپیکردنی هەموو درایڤەکان
-              Get-Volume | Where-Object {$_.DriveLetter -ne $null} | ForEach-Object {
-                  $sourceDrive = "$($_.DriveLetter):\"
-                  $backupPath = "S:\Backup\$($_.DriveLetter)_Drive"
+              # یەکەم: دروستکردنی Backup
+              New-Item -ItemType Directory -Path "S:\Backup" -Force
+              
+              # کۆپیکردنی هەموو درایڤەکان بۆ Backup
+              Get-WmiObject Win32_LogicalDisk | Where-Object {$_.DriveType -eq 3} | ForEach-Object {
+                  $driveLetter = $_.DeviceID.TrimEnd(':')
+                  $sourceDrive = "$driveLetter`:\"
+                  $backupPath = "S:\Backup\${driveLetter}_Drive"
                   
-                  if (Test-Path $sourceDrive) {
+                  if (Test-Path $sourceDrive -and $driveLetter -ne "S") {
                       Write-Host "کۆپیکردنی $sourceDrive..."
-                      robocopy $sourceDrive $backupPath /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL
+                      New-Item -ItemType Directory -Path $backupPath -Force
+                      robocopy $sourceDrive $backupPath /E /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF pagefile.sys hiberfil.sys swapfile.sys
                   }
               }
               
               # دووەم: گواستنەوە لە VHD بۆ C:
-              robocopy S:\ C:\ /MIR /COPYALL /R:0 /W:0 /NP /NFL /NDL
+              Write-Host "گواستنەوەی داتا لە VHD بۆ C:..."
+              robocopy S:\ C:\ /E /COPYALL /R:0 /W:0 /NP /NFL /NDL /XF "pagefile.sys" "hiberfil.sys" "swapfile.sys"
               
               # ٣. دزانی لە درایڤ
-              Dismount-VHD "${{ env.VHD_PATH }}"
+              $detachScript = @"
+select vdisk file="${{ env.VHD_PATH }}"
+detach vdisk
+"@
+              
+              $detachScript | Out-File -FilePath "$env:TEMP\detach_restore.txt" -Encoding ASCII
+              diskpart /s "$env:TEMP\detach_restore.txt"
           }
           
           Write-Host "✅ سیستەمی هەمیشەیی ئامادەکرا"
@@ -129,44 +168,6 @@ jobs:
           
           Write-Host "🌐 ئایپی هەمیشەیی: $tsIP"
 
-      - name: System Backup Automation
-        run: |
-          # دروستکردنی سکریپتی خۆکاری backup
-          $backupScriptContent = "# سکریپتی خۆکاری هەڵگرتن\n"
-          $backupScriptContent += "$backupPath = \"`$env:TEMP\\SystemBackup_`$(Get-Date -Format 'yyyyMMdd_HHmmss').zip\"\n"
-          $backupScriptContent += "$excludePatterns = @(\n"
-          $backupScriptContent += "    \"*.tmp\",\n"
-          $backupScriptContent += "    \"*.log\", \n"
-          $backupScriptContent += "    \"pagefile.sys\",\n"
-          $backupScriptContent += "    \"hiberfil.sys\",\n"
-          $backupScriptContent += "    \"swapfile.sys\"\n"
-          $backupScriptContent += ")\n\n"
-          $backupScriptContent += "# هەڵگرتنی Registry\n"
-          $backupScriptContent += "Write-Host \"💾 هەڵگرتنی Registry...\"\n"
-          $backupScriptContent += "reg export HKLM\\Software \"`$env:TEMP\\registry_hklm.reg\" /y\n"
-          $backupScriptContent += "reg export HKCU \"`$env:TEMP\\registry_hkcu.reg\" /y\n\n"
-          $backupScriptContent += "# هەڵگرتنی Programs\n"
-          $backupScriptContent += "Write-Host \"📦 هەڵگرتنی Programs...\"\n"
-          $backupScriptContent += "Get-WmiObject -Class Win32_Product | Select-Object Name, Version | Export-Csv \"`$env:TEMP\\installed_programs.csv\" -NoTypeInformation\n\n"
-          $backupScriptContent += "# هەڵگرتنی Services\n"
-          $backupScriptContent += "Get-Service | Where-Object {`$_.StartType -eq 'Automatic'} | Select-Object Name, DisplayName | Export-Csv \"`$env:TEMP\\services.csv\" -NoTypeInformation\n\n"
-          $backupScriptContent += "# دروستکردنی System Image\n"
-          $backupScriptContent += "Write-Host \"🖼️ دروستکردنی System Image...\"\n"
-          $backupScriptContent += "$imagePath = \"`$env:TEMP\\SystemImage.wim\"\n"
-          $backupScriptContent += "Dism /Capture-Image /ImageFile:\"`$imagePath\" /CaptureDir:C:\\ /Name:\"FullSystem\"\n\n"
-          $backupScriptContent += "Write-Host \"✅ هەڵگرتن تەواو بوو: `$imagePath\"\n"
-          
-          $backupScriptContent | Out-File -FilePath "C:\AutoBackup.ps1" -Encoding UTF8
-          
-          # دانانی خۆکاری backup هەموو ١٠ خولەک جارێک
-          $taskScriptContent = "$action = New-ScheduledTaskAction -Execute \"powershell.exe\" -Argument \"-File C:\\AutoBackup.ps1\"\n"
-          $taskScriptContent += "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)\n"
-          $taskScriptContent += "$principal = New-ScheduledTaskPrincipal -UserId \"SYSTEM\" -LogonType ServiceAccount -RunLevel Highest\n"
-          $taskScriptContent += "Register-ScheduledTask -TaskName \"AutoSystemBackup\" -Action `$action -Trigger `$trigger -Principal `$principal -Description \"Auto backup every 10 minutes\"\n"
-          
-          $taskScriptContent | Out-File -FilePath "C:\SetupTask.ps1" -Encoding UTF8
-          powershell -ExecutionPolicy Bypass -File "C:\SetupTask.ps1"
-
       - name: نمایشی زانیاری
         run: |
           Write-Host "========================================"
@@ -188,55 +189,90 @@ jobs:
           Write-Host "3. کاتێک دووبارە دەستپێدەکەیت، هەموو شتێک وەک پێشترە"
           Write-Host "========================================"
           
-          # دانانی کاتی کۆتایی
-          $shutdownScriptContent = "$endTime = (Get-Date).AddHours(5)\n\n"
-          $shutdownScriptContent += "while ((Get-Date) -lt `$endTime) {\n"
-          $shutdownScriptContent += "    `$remaining = `$endTime - (Get-Date)\n"
-          $shutdownScriptContent += "    `$hours = [math]::Floor(`$remaining.TotalHours)\n"
-          $shutdownScriptContent += "    `$minutes = [math]::Floor(`$remaining.TotalMinutes) % 60\n\n"
-          $shutdownScriptContent += "    Write-Host \"[`$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: `$hours کاتژمێر `$minutes خولەک\"\n\n"
-          $shutdownScriptContent += "    # Backupی خۆکار هەموو ١٠ خولەک جارێک\n"
-          $shutdownScriptContent += "    if ((Get-Date).Minute % 10 -eq 0) {\n"
-          $shutdownScriptContent += "        powershell -ExecutionPolicy Bypass -File C:\\AutoBackup.ps1\n"
-          $shutdownScriptContent += "    }\n\n"
-          $shutdownScriptContent += "    Start-Sleep -Seconds 60\n"
-          $shutdownScriptContent += "}\n\n"
-          $shutdownScriptContent += "# کۆتایی: Backupی کۆتایی\n"
-          $shutdownScriptContent += "Write-Host \"💾 Backupی کۆتایی...\"\n"
-          $shutdownScriptContent += "powershell -ExecutionPolicy Bypass -File C:\\AutoBackup.ps1\n\n"
-          $shutdownScriptContent += "Write-Host \"🕒 کاتی تەواو بوون! `$(Get-Date)\"\n"
-          $shutdownScriptContent += "Write-Host \"سیستەم خۆکارانە دەکوژێتەوە\"\n"
+          # دانانی کاتی کۆتایی (٥ کاتژمێر)
+          Write-Host "⏰ سیستم خۆکارانە دەکوژێتەوە دوای ٥ کاتژمێر..."
           
-          $shutdownScriptContent | Out-File -FilePath "C:\ShutdownTimer.ps1" -Encoding UTF8
-          Start-Process powershell -ArgumentList "-File C:\ShutdownTimer.ps1" -NoNewWindow
+          $timerScript = @'
+$endTime = (Get-Date).AddHours(5)
+$checkInterval = 300  # ٥ خولەک
+
+while ((Get-Date) -lt $endTime) {
+    $remaining = $endTime - (Get-Date)
+    $hours = [math]::Floor($remaining.TotalHours)
+    $minutes = [math]::Floor($remaining.TotalMinutes) % 60
+    
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ماوەی مابووە: $hours کاتژمێر $minutes خولەک"
+    
+    Start-Sleep -Seconds $checkInterval
+}
+
+Write-Host "🕒 کاتی تەواو بوون! $(Get-Date)"
+Write-Host "سیستەم خۆکارانە دەکوژێتەوە"
+'@
+          
+          $timerScript | Out-File -FilePath "$env:TEMP\shutdown_timer.ps1" -Encoding UTF8
+          Start-Process powershell -ArgumentList "-File $env:TEMP\shutdown_timer.ps1" -NoNewWindow
 
       - name: Backupی کۆتایی پێش کوژانەوە
         run: |
           Write-Host "💾 هەڵگرتنی کۆتایی پێش کوژانەوە..."
           
-          # ١. هەڵگرتنی هەموو بەکارهێنەران
-          $usersPath = "C:\Users"
-          $backupUsers = "$env:TEMP\Users_Backup_$(Get-Date -Format 'yyyyMMdd').zip"
+          # ١. دروستکردنی Backup فۆڵدەر
+          $backupDir = "$env:TEMP\Final_Backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+          New-Item -ItemType Directory -Path $backupDir -Force
           
-          if (Test-Path $usersPath) {
-              Compress-Archive -Path $usersPath -DestinationPath $backupUsers -CompressionLevel Optimal
-              Write-Host "✅ بەکارهێنەران هەڵگیرا"
+          # ٢. هەڵگرتنی بەکارهێنەران
+          $usersBackup = "$backupDir\Users_Backup.zip"
+          if (Test-Path "C:\Users") {
+              $userFolders = Get-ChildItem "C:\Users" -Directory | Where-Object {$_.Name -notin @("Public", "Default", "Default.migrated")}
+              
+              foreach ($user in $userFolders) {
+                  $userBackup = "$backupDir\$($user.Name)_Backup.zip"
+                  try {
+                      Compress-Archive -Path $user.FullName -DestinationPath $userBackup -CompressionLevel Optimal -ErrorAction SilentlyContinue
+                      Write-Host "✅ $($user.Name) هەڵگیرا"
+                  } catch {
+                      Write-Host "⚠️ نەتوانرا $($user.Name) هەڵبگیرێت"
+                  }
+              }
           }
           
-          # ٢. هەڵگرتنی Programs
-          $programs = Get-WmiObject -Class Win32_Product | Select-Object Name, Version, InstallDate
-          $programs | Export-Csv "$env:TEMP\Installed_Programs_Final.csv" -NoTypeInformation -Encoding UTF8
+          # ٣. هەڵگرتنی Programs لیست
+          Write-Host "📦 هەڵگرتنی Programs لیست..."
+          try {
+              Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | 
+                  Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | 
+                  Where-Object {$_.DisplayName} |
+                  Export-Csv "$backupDir\Installed_Programs.csv" -NoTypeInformation -Encoding UTF8
+          } catch {
+              # Alternative method
+              Get-WmiObject -Class Win32_Product | Select-Object Name, Version, InstallDate | 
+                  Export-Csv "$backupDir\Installed_Programs_WMI.csv" -NoTypeInformation -Encoding UTF8
+          }
           
-          # ٣. هەڵگرتنی Registry
-          reg export HKLM\Software "$env:TEMP\HKLM_Software_Final.reg" /y
-          reg export HKCU "$env:TEMP\HKCU_Final.reg" /y
+          # ٤. هەڵگرتنی Registry
+          Write-Host "🔧 هەڵگرتنی Registry..."
+          try {
+              reg export "HKCU" "$backupDir\HKCU_Backup.reg" /y
+              reg export "HKLM\Software" "$backupDir\HKLM_Software_Backup.reg" /y
+          } catch {
+              Write-Host "⚠️ Registry هەڵگرتن شکستی هێنا"
+          }
           
-          # ٤. دروستکردنی System Restore Point
-          Checkpoint-Computer -Description "Pre-Shutdown Backup" -RestorePointType MODIFY_SETTINGS
+          # ٥. هەڵگرتنی Desktop, Documents, Downloads
+          $importantFolders = @("Desktop", "Documents", "Downloads", "Pictures", "Videos")
+          foreach ($folder in $importantFolders) {
+              $userFolder = "C:\Users\${{ env.RDP_USER }}\$folder"
+              if (Test-Path $userFolder) {
+                  $folderBackup = "$backupDir\${folder}_Backup.zip"
+                  try {
+                      Compress-Archive -Path $userFolder -DestinationPath $folderBackup -CompressionLevel Optimal -ErrorAction SilentlyContinue
+                  } catch { }
+              }
+          }
           
+          # ٦. کۆی گەورەیی
+          $totalSize = (Get-ChildItem $backupDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
           Write-Host "✅ هەموو داتاکان هەڵگیران"
-          Write-Host "📊 کۆی گەورەیی:"
-          Get-ChildItem "$env:TEMP\*_Backup_*", "$env:TEMP\*_Final.*" | ForEach-Object {
-              $size = [math]::Round($_.Length / 1MB, 2)
-              Write-Host "  - $($_.Name): $size MB"
-          }
+          Write-Host "📊 کۆی گەورەیی: $([math]::Round($totalSize, 2)) MB"
+          Write-Host "📁 فۆڵدەری Backup: $backupDir"
