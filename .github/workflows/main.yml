@@ -79,7 +79,7 @@ jobs:
       - name: Timer بۆ shutdown خودکار (5 کاتژمێر)
         run: |
           $endTime = (Get-Date).AddHours(5)
-          $checkInterval = 300  # 5 خولەک
+          $checkInterval = 360  # 5 خولەک
           
           while ((Get-Date) -lt $endTime) {
               $remaining = $endTime - (Get-Date)
